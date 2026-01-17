@@ -12,7 +12,8 @@ SHEET_NAME = "StudyData" # 구글 시트 파일 이름
 
 @st.cache_resource
 def connect_google_sheet():
-    creds = ServiceAccountCredentials.from_json_keyfile_name("secrets.json", SCOPE)
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME).sheet1
     return sheet
@@ -152,3 +153,4 @@ elif menu == "목록/관리":
     st.write("구글 시트의 데이터입니다.")
     st.dataframe(st.session_state.data)
     st.caption("수정/삭제는 구글 스프레드시트에서 직접 하는 것이 더 빠르고 정확합니다.")
+
