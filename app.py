@@ -12,7 +12,13 @@ SHEET_NAME = "StudyData" # 구글 시트 파일 이름
 
 @st.cache_resource
 def connect_google_sheet():
+    # 1. Secrets 정보를 가져옵니다.
     creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # 2. [핵심] 에러 원인 해결! 글자 '\n'을 진짜 줄바꿈으로 강제 변환합니다.
+    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    
+    # 3. 구글 시트에 연결합니다.
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME).sheet1
@@ -153,4 +159,5 @@ elif menu == "목록/관리":
     st.write("구글 시트의 데이터입니다.")
     st.dataframe(st.session_state.data)
     st.caption("수정/삭제는 구글 스프레드시트에서 직접 하는 것이 더 빠르고 정확합니다.")
+
 
