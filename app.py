@@ -4,19 +4,24 @@ from oauth2client.service_account import ServiceAccountCredentials
 import random
 import datetime
 import os
+import requests # 이미지 전송용
 
-# --- 구글 시트 연결 설정 ---
-# 주의: secrets.json 파일이 같은 폴더에 있어야 함
+# --- 설정 ---
+# 구글 시트 연결 설정
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-SHEET_NAME = "StudyData" # 구글 시트 파일 이름
+SHEET_NAME = "StudyData"
+
+# ImgBB API 키 (이미지 저장소)
+IMGBB_KEY = "c7d34c614079feca31b8cce16ece746c"
 
 @st.cache_resource
 def connect_google_sheet():
     # 1. Secrets 정보를 가져옵니다.
     creds_dict = dict(st.secrets["gcp_service_account"])
     
-    # 2. [핵심] 에러 원인 해결! 글자 '\n'을 진짜 줄바꿈으로 강제 변환합니다.
-    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    # 2. 에러 원인 해결! 글자 '\n'을 진짜 줄바꿈으로 강제 변환합니다.
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
     
     # 3. 구글 시트에 연결합니다.
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
@@ -24,7 +29,24 @@ def connect_google_sheet():
     sheet = client.open(SHEET_NAME).sheet1
     return sheet
 
-# --- 데이터 관리 함수 ---
+# --- 기능 함수들 ---
+
+# ImgBB에 이미지를 올리고 URL을 받아오는 함수
+def upload_to_imgbb(file):
+    try:
+        url = "https://api.imgbb.com/1/upload"
+        payload = {"key": IMGBB_KEY}
+        files = {"image": file.getvalue()}
+        response = requests.post(url, data=payload, files=files)
+        result = response.json()
+        if result["success"]:
+            return result["data"]["url"] # 사진 주소 반환
+        else:
+            return None
+    except Exception as e:
+        st.error(f"이미지 업로드 오류: {e}")
+        return None
+
 def load_data():
     try:
         sheet = connect_google_sheet()
@@ -41,37 +63,25 @@ def load_data():
 def add_data_to_sheet(new_item):
     sheet = connect_google_sheet()
     # 리스트 순서: subject, q, a, img, tried, correct
-    row = [new_item['subject'], new_item['q'], new_item['a'], "", 0, 0]
+    # 이미지가 없으면 빈칸("")으로 들어갑니다.
+    row = [new_item['subject'], new_item['q'], new_item['a'], new_item.get('img', ""), 0, 0]
     sheet.append_row(row)
 
 def update_data_in_sheet(row_idx, col_name, value):
     # row_idx는 0부터 시작하지만 엑셀은 2행부터 데이터가 시작하므로 +2
     sheet = connect_google_sheet()
-    
     col_map = {'subject': 1, 'q': 2, 'a': 3, 'img': 4, 'tried': 5, 'correct': 6}
     col_num = col_map[col_name]
-    
     sheet.update_cell(row_idx + 2, col_num, value)
 
-def delete_data_from_sheet(row_idx):
-    sheet = connect_google_sheet()
-    sheet.delete_row(row_idx + 2)
-
 # --- 세션 상태 초기화 ---
-if 'data' not in st.session_state:
-    st.session_state.data = load_data()
-
-# 데이터가 비었으면 다시 로드 시도
-if not st.session_state.data:
-    st.session_state.data = load_data()
-
-if 'current_q' not in st.session_state:
-    st.session_state.current_q = None
-if 'show_answer' not in st.session_state:
-    st.session_state.show_answer = False
+if 'data' not in st.session_state: st.session_state.data = load_data()
+if not st.session_state.data: st.session_state.data = load_data()
+if 'current_q' not in st.session_state: st.session_state.current_q = None
+if 'show_answer' not in st.session_state: st.session_state.show_answer = False
 
 # --- 메인 화면 ---
-st.title("☁️ 구글 연동 암기장")
+st.title("☁️ 구글 연동 암기장 (이미지 지원)")
 
 with st.sidebar:
     menu = st.radio("메뉴", ["홈 (공부하기)", "문제 추가", "목록/관리"])
@@ -102,8 +112,10 @@ if menu == "홈 (공부하기)":
                 st.session_state.current_q = random.choices(candidates, weights=weights, k=1)[0]
             
             # 인덱스 찾기
-            # 주의: 리스트 내 딕셔너리 비교가 까다로울 수 있어 간단히 내용으로 찾음 (중복 문제 시 이슈 가능성 있음)
-            st.session_state.q_index = st.session_state.data.index(st.session_state.current_q)
+            try:
+                st.session_state.q_index = st.session_state.data.index(st.session_state.current_q)
+            except:
+                st.session_state.q_index = 0
             st.rerun()
 
     if st.session_state.current_q:
@@ -118,14 +130,16 @@ if menu == "홈 (공부하기)":
         if st.session_state.show_answer:
             st.success(f"정답: {q['a']}")
             
+            # 이미지가 있으면 보여주기
+            if q.get('img') and str(q['img']).startswith('http'):
+                st.image(q['img'], caption="참고 이미지")
+            
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("O 맞음"):
                     idx = st.session_state.q_index
-                    # 메모리 업데이트
                     st.session_state.data[idx]['tried'] += 1
                     st.session_state.data[idx]['correct'] += 1
-                    # 구글 시트 업데이트 (속도 느림 주의)
                     update_data_in_sheet(idx, 'tried', st.session_state.data[idx]['tried'])
                     update_data_in_sheet(idx, 'correct', st.session_state.data[idx]['correct'])
                     st.toast("저장됨!")
@@ -144,12 +158,25 @@ if menu == "홈 (공부하기)":
 
 # --- 2. 추가 ---
 elif menu == "문제 추가":
+    st.info("💡 폰에서 접속하면 카메라로 바로 찍어 올릴 수 있습니다!")
     with st.form("add"):
         s = st.text_input("과목")
         q = st.text_area("문제")
         a = st.text_area("정답")
+        img_file = st.file_uploader("이미지 첨부 (선택)", type=['png', 'jpg', 'jpeg'])
+        
         if st.form_submit_button("저장"):
-            new = {'subject': s, 'q': q, 'a': a}
+            img_url = ""
+            # 이미지가 있으면 업로드 시도
+            if img_file:
+                with st.spinner("이미지 업로드 중..."):
+                    uploaded_url = upload_to_imgbb(img_file)
+                    if uploaded_url:
+                        img_url = uploaded_url
+                    else:
+                        st.warning("이미지 업로드 실패. 텍스트만 저장합니다.")
+            
+            new = {'subject': s, 'q': q, 'a': a, 'img': img_url}
             add_data_to_sheet(new) # 구글 시트에 저장
             st.session_state.data = load_data() # 데이터 다시 불러오기
             st.success("추가되었습니다!")
@@ -159,5 +186,3 @@ elif menu == "목록/관리":
     st.write("구글 시트의 데이터입니다.")
     st.dataframe(st.session_state.data)
     st.caption("수정/삭제는 구글 스프레드시트에서 직접 하는 것이 더 빠르고 정확합니다.")
-
-
